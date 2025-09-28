@@ -1,4 +1,4 @@
-name: Backstage CI-CD Ultra-Paralelo Corrigido
+name: Backstage CI/CD Granular
 
 permissions:
   contents: read
@@ -11,12 +11,14 @@ on:
       - dev
     paths:
       - 'backstage-app/**'
+      - 'packages/**'
       - 'helm-chart/**'
   pull_request:
     branches:
       - dev
     paths:
       - 'backstage-app/**'
+      - 'packages/**'
       - 'helm-chart/**'
   workflow_dispatch:
     inputs:
@@ -30,34 +32,29 @@ on:
           - prod
 
 jobs:
-  lint:
-    name: Lint Helm Chart
+  lint-helm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Helm
+      - name: Setup Helm
         uses: azure/setup-helm@v4
         with:
           version: '3.12.0'
-      - name: Lint Helm Chart
-        run: helm lint helm-chart/
-      - name: Validate Helm Templates
-        run: helm template backstage helm-chart/ --debug --dry-run
+      - run: helm lint helm-chart/
+      - run: helm template backstage helm-chart/ --debug --dry-run
 
   security-scan:
-    name: Security Scan
     runs-on: ubuntu-latest
+    needs: lint-helm
     steps:
       - uses: actions/checkout@v4
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: 'helm-chart/'
           format: 'sarif'
           output: 'trivy-results.sarif'
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -65,39 +62,34 @@ jobs:
     name: Build & Push Backend
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: security-scan
     steps:
       - uses: actions/checkout@v3
-
-      - name: Cache Yarn Backend
+      - name: Cache Yarn
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: backend-yarn-${{ hashFiles('backstage-app/packages/backend/yarn.lock') }}
-
-      - name: Install dependencies and build Backend
-        working-directory: ./backstage-app/packages/backend
-        run: |
-          yarn install
-          yarn tsc
-          yarn build
-
+          key: yarn-cache-backend-${{ hashFiles('packages/backend/yarn.lock') }}
+      - name: Install dependencies
+        working-directory: ./packages/backend
+        run: yarn install
+      - name: Build backend with Backstage CLI
+        working-directory: ./packages/backend
+        run: npx @backstage/cli package build
       - id: set-backend-tag
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build & Push Docker Image Backend
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v5
         with:
-          context: ./backstage-app/packages/backend
-          file: ./backstage-app/packages/backend/Dockerfile
+          context: ./packages/backend
+          file: ./packages/backend/Dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:${{ steps.set-backend-tag.outputs.tag }}
           cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache
@@ -107,50 +99,45 @@ jobs:
     name: Build & Push Frontend
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: security-scan
     steps:
       - uses: actions/checkout@v3
-
-      - name: Cache Yarn Frontend
+      - name: Cache Yarn
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: frontend-yarn-${{ hashFiles('backstage-app/packages/app/yarn.lock') }}
-
-      - name: Install dependencies and build Frontend
-        working-directory: ./backstage-app/packages/app
-        run: |
-          yarn install
-          yarn build
-
+          key: yarn-cache-frontend-${{ hashFiles('packages/app/yarn.lock') }}
+      - name: Install dependencies
+        working-directory: ./packages/app
+        run: yarn install
+      - name: Build frontend with Backstage CLI
+        working-directory: ./packages/app
+        run: npx @backstage/cli package build
       - id: set-frontend-tag
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build & Push Docker Image Frontend
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v5
         with:
-          context: ./backstage-app/packages/app
-          file: ./backstage-app/packages/app/Dockerfile
+          context: ./packages/app
+          file: ./packages/app/Dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:${{ steps.set-frontend-tag.outputs.tag }}
           cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache
           cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache,mode=max
 
   update-helm-values:
-    name: Update Helm Chart Values
     runs-on: ubuntu-latest
     needs: [build-backend, build-frontend]
     steps:
       - uses: actions/checkout@v4
-      - name: Update values.yaml with new image tags
+      - name: Update Helm Chart Values
         run: |
           BACKEND_TAG=${{ needs.build-backend.outputs.tag }}
           FRONTEND_TAG=${{ needs.build-frontend.outputs.tag }}
@@ -160,9 +147,8 @@ jobs:
           sed -i "s|tag:.*frontend.*|tag: $FRONTEND_TAG|" helm-chart/values.yaml
 
   deploy:
-    name: Deploy to ArgoCD
     runs-on: ubuntu-latest
-    needs: [lint, security-scan, update-helm-values]
+    needs: [update-helm-values]
     steps:
       - uses: actions/checkout@v4
       - name: Install ArgoCD CLI
