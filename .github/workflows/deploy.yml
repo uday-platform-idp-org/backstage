@@ -1,4 +1,4 @@
-name: Backstage CI-CD Ultra-Paralelo Optimizado
+name: Backstage CI-CD Ultra-Paralelo Matrix
 
 permissions:
   contents: read
@@ -10,15 +10,15 @@ on:
       - main
       - dev
     paths:
-      - 'packages/backend/**'
-      - 'packages/app/**'
+      - 'backstage-app/**'
+      - 'packages/**'
       - 'helm-chart/**'
   pull_request:
     branches:
       - dev
     paths:
-      - 'packages/backend/**'
-      - 'packages/app/**'
+      - 'backstage-app/**'
+      - 'packages/**'
       - 'helm-chart/**'
   workflow_dispatch:
     inputs:
@@ -50,37 +50,45 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
-      - name: Run Trivy
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: 'helm-chart/'
           format: 'sarif'
           output: 'trivy-results.sarif'
-      - name: Upload Trivy results
+      - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
 
-  build-app:
-    name: Build & Push Apps (Backend + Frontend)
+  build-and-push:
+    name: Build & Push Apps
     runs-on: ubuntu-latest
-    needs: [lint, security-scan]
+    needs: security-scan
     strategy:
       matrix:
-        app: [backend, frontend]
+        app: 
+          - backend
+          - frontend
     timeout-minutes: 60
+    outputs:
+      image_tag_backend: ${{ steps.set-tag.outputs.tag }}
+      image_tag_frontend: ${{ steps.set-tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
-      - name: Set working directory
-        id: set-dir
+      - name: Set package variables
         run: |
           if [ "${{ matrix.app }}" == "backend" ]; then
-            echo "DIR=packages/backend" >> $GITHUB_OUTPUT
+            export APP_DIR="./packages/backend"
+            export DOCKER_IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend"
           else
-            echo "DIR=packages/app" >> $GITHUB_OUTPUT
+            export APP_DIR="./packages/app"
+            export DOCKER_IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend"
           fi
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
+          echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> $GITHUB_ENV
 
       - name: Cache Yarn
         uses: actions/cache@v3
@@ -88,13 +96,14 @@ jobs:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: yarn-cache-${{ matrix.app }}-${{ hashFiles('packages/' + matrix.app + '/yarn.lock') }}
+          key: ${{ format('yarn-cache-{0}-{1}', matrix.app, hashFiles(env.APP_DIR + '/yarn.lock')) }}
 
-      - name: Install dependencies and build
+      - name: Install dependencies & build
+        working-directory: ${{ env.APP_DIR }}
         run: |
-          cd ${{ steps.set-dir.outputs.DIR }}
-          yarn install --immutable
+          yarn install
           if [ "${{ matrix.app }}" == "backend" ]; then
+            yarn tsc
             yarn build
           else
             yarn build
@@ -113,30 +122,30 @@ jobs:
       - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: ${{ steps.set-dir.outputs.DIR }}
-          file: ${{ steps.set-dir.outputs.DIR }}/Dockerfile
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-${{ matrix.app }}:${{ steps.set-tag.outputs.tag }}
+          tags: ${{ env.DOCKER_IMAGE }}:${{ steps.set-tag.outputs.tag }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:cache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:cache,mode=max
 
   update-helm-values:
     name: Update Helm Chart Values
     runs-on: ubuntu-latest
-    needs: build-app
+    needs: build-and-push
     steps:
       - uses: actions/checkout@v4
-      - name: Update values.yaml
+      - name: Update values.yaml with new image tags
         run: |
-          BACKEND_TAG=$(jq -r '.[] | select(.matrix.app=="backend") | .steps[] | select(.id=="set-tag") | .outputs.tag' <<< '${{ toJSON(needs.build-app) }}')
-          FRONTEND_TAG=$(jq -r '.[] | select(.matrix.app=="frontend") | .steps[] | select(.id=="set-tag") | .outputs.tag' <<< '${{ toJSON(needs.build-app) }}')
           sed -i "s|repository:.*backend.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend|" helm-chart/values.yaml
-          sed -i "s|tag:.*backend.*|tag: $BACKEND_TAG|" helm-chart/values.yaml
+          sed -i "s|tag:.*backend.*|tag: v$(echo $GITHUB_SHA | cut -c1-7)|" helm-chart/values.yaml
           sed -i "s|repository:.*frontend.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend|" helm-chart/values.yaml
-          sed -i "s|tag:.*frontend.*|tag: $FRONTEND_TAG|" helm-chart/values.yaml
+          sed -i "s|tag:.*frontend.*|tag: v$(echo $GITHUB_SHA | cut -c1-7)|" helm-chart/values.yaml
 
   deploy:
     name: Deploy to ArgoCD
     runs-on: ubuntu-latest
-    needs: update-helm-values
+    needs: [lint, security-scan, update-helm-values]
     steps:
       - uses: actions/checkout@v4
       - name: Install ArgoCD CLI
