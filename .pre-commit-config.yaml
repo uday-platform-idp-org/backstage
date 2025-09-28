@@ -1,0 +1,40 @@
+# Pre-commit hooks para qualidade do código
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-case-conflict
+
+  - repo: https://github.com/gruntwork-io/pre-commit
+    rev: v0.1.17
+    hooks:
+      - id: helmlint
+
+  - repo: local
+    hooks:
+      - id: helm-template-validate
+        name: Helm Template Validation
+        entry: helm template backstage helm-chart/ --debug --dry-run
+        language: system
+        files: ^helm-chart/
+        pass_filenames: false
+
+      - id: yaml-lint
+        name: YAML Lint
+        entry: yamllint
+        language: python
+        additional_dependencies: [yamllint]
+        types: [yaml]
+        args: [-c=.yamllint.yml]
+
+      - id: security-scan
+        name: Security Scan
+        entry: trivy fs helm-chart/
+        language: system
+        files: ^helm-chart/
+        pass_filenames: false

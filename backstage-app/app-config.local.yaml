@@ -1,0 +1,26 @@
+# Backstage override configuration for your local development environment
+app:
+  title: Uday Backstage Dev
+  baseUrl: http://localhost:3000
+  listen:
+    host: 0.0.0.0
+
+auth:
+  environment: development
+  providers:
+    github:
+      development:
+        clientId: ${AUTH_GITHUB_CLIENT_ID}
+        clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+        signIn:
+          resolvers:
+            - resolver: usernameMatchingUserEntityName
+
+catalog:
+  rules:
+    - allow: [Group, User, Component, System, API, Resource, Location]
+  locations:
+    - type: file
+      target: /app/backstage-app/identidades/usuarios.yaml
+    - type: file
+      target: /app/backstage-app/identidades/grupos.yaml

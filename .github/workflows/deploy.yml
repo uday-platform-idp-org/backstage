@@ -1,0 +1,111 @@
+name: Backstage CI-CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'helm-charts/**/values.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'helm-chart/**'
+
+jobs:
+  lint-and-validate:
+    name: Lint and Validate Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: '3.12.0'
+
+      - name: Lint Helm Chart
+        run: helm lint helm-chart/
+
+      - name: Validate Helm Templates
+        run: helm template backstage helm-chart/ --debug --dry-run
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: lint-and-validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'helm-chart/'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  deploy-staging:
+    name: Deploy to Staging (ArgoCD)
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate, security-scan]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ArgoCD Login
+        run: |
+          argocd login argocd.uday.com.br:9092 \
+            --insecure \
+            --grpc-web \
+            --username admin \
+            --password ${{ secrets.ARGOCD_PASSWORD }}
+
+      - name: Sync Backstage (Staging)
+        run: |
+          argocd app sync backstage-staging
+          argocd app wait backstage-staging --timeout 180
+
+  deploy-production:
+    name: Deploy to Production (ArgoCD)
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ArgoCD Login
+        run: |
+          argocd login argocd.uday.com.br:9092 \
+            --insecure \
+            --grpc-web \
+            --username admin \
+            --password ${{ secrets.ARGOCD_PASSWORD }}
+
+      - name: Sync Backstage (Production)
+        run: |
+          argocd app sync backstage
+          argocd app wait backstage --timeout 300
+
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    steps:
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: |
+            Backstage deployment status: ${{ job.status }}
+            Branch: ${{ github.ref }}
+            Commit: ${{ github.sha }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

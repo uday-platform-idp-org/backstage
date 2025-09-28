@@ -1,0 +1,105 @@
+app:
+  title: Uday Backstage Produção
+  baseUrl: https://backstage.cloududay.com.br:8282
+  listen:
+    host: 0.0.0.0
+    port: 7007
+
+organization:
+  name: Uday Tribo Produção
+
+backend:
+  baseUrl: https://backstage.cloududay.com.br:8282
+  listen:
+    host: 0.0.0.0
+    port: 7007
+  csp:
+    connect-src: ["'self'", 'http:', 'https:']
+  cors:
+    origin: https://backstage.cloududay.com.br:8282
+    methods: [GET, HEAD, PATCH, POST, PUT, DELETE]
+    credentials: true
+  
+  database:
+    client: pg
+    connection:
+      host: postgres
+      port: 5432
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      database: ${POSTGRES_DB}
+
+integrations:
+  github:
+    - host: github.com
+      token: ${GITHUB_TOKEN}
+
+techdocs:
+  builder: 'local'
+  generator:
+    runIn: 'local'
+  publisher:
+    type: 'local'
+
+auth:
+  environment: production
+  session:
+    secret: ${AUTH_SESSION_SECRET}
+  providers:
+    github:
+      production:
+        clientId: ${AUTH_GITHUB_CLIENT_ID}
+        clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+        callbackUrl: https://backstage.cloududay.com.br:8282/api/auth/github/handler/frame
+        signIn:
+          resolvers:
+            - resolver: usernameMatchingUserEntityName
+
+signInPage: github
+
+scaffolder: {}
+
+catalog:
+  import:
+    entityFilename: catalog-info.yaml
+    pullRequestBranchName: backstage-integration
+  rules:
+    - allow: [Component, System, API, Resource, Location, Group, User, Template]
+  locations:
+    - type: file
+      target: identidades/usuarios.yaml
+    - type: file
+      target: identidades/grupos.yaml
+    - type: url
+      target: https://github.com/uday-platform-idp-org/templates-software-backstage/blob/main/catalog-info.yaml
+    - type: url
+      target: https://github.com/uday-platform-idp-org/templates-infra-backstage/blob/main/catalog-info.yaml
+
+kubernetes:
+  serviceLocatorMethod:
+    type: 'singleTenant'
+  clusterLocatorMethods:
+    - type: 'config'
+      clusters:
+        - url: https://192.168.1.250:6443
+          name: production-cluster
+          authProvider: 'serviceAccount'
+          serviceAccountToken: eyJhbGciOiJSUzI1NiIsImtpZCI6ImhxSU9SMHo4cTY3ekpyY0tKendVWlg0Qk81Y1dMM2VJSEI3RzN0WmRYUGsifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiXSwiZXhwIjoxNzkwMDQ3NDMxLCJpYXQiOjE3NTg1MTE0MzEsImlzcyI6Imh0dHBzOi8va3ViZXJuZXRlcy5kZWZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsIiwianRpIjoiMjBmYjBiODEtY2JiMS00NDI3LTg0YTgtNmFiNGM4ZDY3MDEwIiwia3ViZXJuZXRlcy5pbyI6eyJuYW1lc3BhY2UiOiJiYWNrc3RhZ2UiLCJzZXJ2aWNlYWNjb3VudCI6eyJuYW1lIjoiYmFja3N0YWdlLXNhIiwidWlkIjoiNjczMGU4OWQtMDJhYy00MTgxLThkODAtNTdlYzYxMjFhZjIwIn19LCJuYmYiOjE3NTg1MTE0MzEsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDpiYWNrc3RhZ2U6YmFja3N0YWdlLXNhIn0.SvKCffkzbBJTYPoYQSlQEis-82sx2vT8dsvH8tlDeutdkH3XpDW2GjNMDKQ6-8qqmF-uz_GCuLAo8XgFBqmUKyCS03BBApMhQFhT0eRilMOEr5sP4NCJD8MDxC5Id7n6TS9h5_jVpa7YY18zYr-H25Nf0XIU0u7sdvNzraNZOmt9BkXk2RnOiYT2THbK_ad2YFy0Yn3sX8GUqHrVfWiVO5LHaredaJqgOXnLEntO_w4PQW4Aa_t7Vp2iJkA9FjOVN8W1wjbiQ7JAywfbHOZks6NuuKfV9fcg57L2oetvadSWHBgqIIe9us443nHI2gcEV4QufZ0GH_QXnsy68WUnnQ
+          caData: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJQ09oTUJ1UFd3Vjh3RFFZSktvWklodmNOQVFFTEJRQXdGVEVUTUJFR0ExVUUKQXhNS2EzVmlaWEp1WlhSbGN6QWVGdzB5TlRBNU1qQXlNVEEwTXpsYUZ3MHpOVEE1TVRneU1UQTVNemxhTUJVeApFekFSQmdOVkJBTVRDbXQxWW1WeWJtVjBaWE13Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLCkFvSUJBUURWOUR5L1BzYS9MbHRmbXFObWZkUlBaTGs4MXYzanVEZDVyWUFWRDJjSjRVUHY4VnYwQThNR3JscVYKbnBYdE5WMDl2QVBoSXBOc1lGOWlCYXIybHIwcGFOQ1JnNTJQTGllR0VyY1I5WGNFbXJwZ1RaemF2TTBoblFpMwpJdGpjVUdWWXlPcFZwdXRhYjE3MVZnYTJ0djdqbmdBMzhKM3BwSmgvYkdRdm1TbTRVSTIrNWR1b0VsZzM4SFI3CjhCTkRUaXJORFhUT0hsUFZqRStQMlJaSTVGTWZGcTdRQTRtczNyVTA2Z1RmdEtJYzArYzV3WkJZS1JsSlorTUIKb2xoU0UvTzdKY09hTWRjc2JKNkFndG5GeG92K01VakFkZVlrcVo5cEt6cmlZYzV5dkNpQWxCT3BXSEQwSlRHaQpvaVlYc3dxU1FWU2Y1Y3JKSHNqVEM1amlleW92QWdNQkFBR2pXVEJYTUE0R0ExVWREd0VCL3dRRUF3SUNwREFQCkJnTlZIUk1CQWY4RUJUQURBUUgvTUIwR0ExVWREZ1FXQkJUS1IreFhlaC9hdlBLQjBBSUx6VlUwNTIvY3R6QVYKQmdOVkhSRUVEakFNZ2dwcmRXSmxjbTVsZEdWek1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQkw0cEFCenRsZgpmL0hId0lCcHVYVFNHL2paVmlHdE45OGxmVHZ1aEFYMzE0cDNSR2E0OUhCTzViR3NnZUU4S1dUOG1wSEpyWm9SCkRrM1N4UXVtOHVaTjZka01yNnJtTERwYmZVd3QwT3dKNVpJY2dYRGw3WXh3NE94UERJM0ZIczBjMmVhWCthRFcKdWJQMHFINDg4QTFqZ1RIQU16aStyd1ZOSnVQWUhobnpWaTB6cmQ2emQ1U0pwaXdwTlpWdVVMRW9sY1R4cjI1NApZOEZybkZlcUdCMHRJNTJtQkYrQXJYRmNHU1IwQzZMNkRRSjVFRVNBaFBwakN3ZFdEeU9sRFd0TnlaT3RKbHFOCmlBUkhaeXRXazI0WW1NOE9oVzRnN3lyVThKZzh6aVFpQXpMSmdLTEsvQlk3V01ZWVphaU9QeWJNd3Jldkh6SUkKQW5NajQ5L1cyQzU4Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+          skipMetricsLookup: true
+          skipTLSVerify: true
+          skipResourceDefinition: true
+        
+permission:
+  enabled: true
+
+argocd:
+  username: ${ARGOCD_USERNAME}
+  password: ${ARGOCD_PASSWORD}
+  appLocatorMethods:
+    - type: 'config'
+      instances:
+        - name: default
+          url: https://argocd.cloududay.com.br:9092
+          skipTLSVerify: true
+          token: ${ARGOCD_AUTH_TOKEN}

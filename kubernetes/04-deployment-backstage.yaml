@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  namespace: backstage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backstage
+  template:
+    metadata:
+      labels:
+        app: backstage
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          command: ['sh', '-c']
+          args:
+            - |
+              until pg_isready -h postgres -p 5432 -U backstage_user; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+      containers:
+        - name: backstage
+          image: udaytc/backstage:v35
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 7007
+          envFrom:
+            - secretRef:
+                name: backstage-secrets  
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: backstage-service
+  namespace: backstage
+spec:
+  selector:
+    app: backstage
+  ports:
+    - protocol: TCP
+      port: 7007        
+      targetPort: 7007
+  type: ClusterIP

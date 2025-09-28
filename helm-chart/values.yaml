@@ -1,0 +1,73 @@
+# Default values for backstage
+nameOverride: ""
+fullnameOverride: ""
+
+namespace: backstage
+
+# PostgreSQL Configuration
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16"
+  auth:
+    username: backstage_user
+    database: backstage_db
+    existingSecret: postgres-backstage-secret
+  storage:
+    storageClassName: longhorn
+    size: 10Gi
+  service:
+    port: 5432
+
+# Backstage Configuration
+backstage:
+  image:
+    repository: udaytc/backstage
+    tag: v35
+    pullPolicy: IfNotPresent
+  
+  replicas: 1
+  
+  service:
+    type: ClusterIP
+    port: 7007
+    targetPort: 7007
+  
+  resources: {}
+  
+  nodeSelector: {}
+  
+  tolerations: []
+  
+  affinity: {}
+
+# Gateway Configuration
+gateway:
+  enabled: true
+  className: istio
+  hostname: backstage.cloududay.com.br
+  tls:
+    enabled: true
+    secretName: backstage-tls-cert
+
+# Secrets
+secrets:
+  postgres:
+    username: YmFja3N0YWdlX3VzZXI=  # backstage_user (base64)
+    database: YmFja3N0YWdlX2Ri        # backstage_db (base64)
+    password: cGFzc3dvcmQ=            # password (base64)
+  
+  backstage:
+    postgres:
+      username: YmFja3N0YWdlX3VzZXI=
+      database: YmFja3N0YWdlX2Ri
+      password: cGFzc3dvcmQ=
+    github:
+      clientId: T3YyM2xpQmxEVUJhZElRUkFUOGw=
+      clientSecret: MThjYjhmMjllZTRhMDFiY2QyYWU1MzIyZGIyOGViOThjZGQ2MjBiNQ==
+      token: Z2hwX0xkV05JRGpvVFdmdXhicU92UnVldUc4ZzhZOUxFZTFGMFpnbg==
+    argocd:
+      token: YXJnb2NkLnRva2VuPWV5SmhiR2NpT2lKSVV6STFOaUlzSW5SNWNDSTZJa3BYVkNKOS5leUpwYzNNaU9pSmhjbWR2WTJRaUxDSnpkV0lpT2lKaFpHMXBianBzYjJkcGJpSXNJbVY0Y0NJNk1UYzFPRFkzTWpRNE1Dd2libUptSWpveE56VTROVGcyTURnd0xDSnBZWFFpT2pFM05UZzFPRFl3T0RBc0ltcDBhU0k2SWprMFpqRmxNVFUxTFRnd1l6Y3RORFUzTnkwNE1UbGhMVGc0T1RBME9HTmpZakE0TUNKOS5hRFFNRnlzVDN1VlFfWDJrd2locERRUHhaYU85T3JDVWJiMkpzbXR0RUVR
+      username: YWRtaW4=
+      password: WFVhNGZuaTFzcUhPeTZGUA==

@@ -1,0 +1,51 @@
+# Docker Compose para desenvolvimento local
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: backstage_user
+      POSTGRES_DB: backstage_db
+      POSTGRES_PASSWORD: password
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backstage_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backstage-network
+
+  backstage:
+    image: udaytc/backstage:v35
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: backstage_user
+      POSTGRES_DB: backstage_db
+      POSTGRES_PASSWORD: password
+      AUTH_GITHUB_CLIENT_ID: your_github_client_id
+      AUTH_GITHUB_CLIENT_SECRET: your_github_client_secret
+      GITHUB_TOKEN: your_github_token
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    ports:
+      - "7007:7007"
+    networks:
+      - backstage-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  backstage-network:
+    driver: bridge

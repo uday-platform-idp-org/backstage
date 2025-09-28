@@ -1,0 +1,27 @@
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: devops
+  description: Developer and Operation 
+spec:
+  type: Operations
+  profile:
+    displayName: DevOps
+    email: devops@uday.com.br
+    picture: https://github.com/uday-platform-idp-org/tools/blob/main/backstage/img/grupos/agil.png
+  parent: infrastructure
+  children: []
+
+---
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: infrastructure
+  description: Operation
+spec:
+  type: Operations
+  profile:
+    displayName: Backstage
+    email: infrastructure@uday.com.br
+    picture: https://github.com/uday-platform-idp-org/tools/blob/main/backstage/img/grupos/infra.jpg
+  children: [devops]
