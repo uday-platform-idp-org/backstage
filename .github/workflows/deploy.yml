@@ -64,12 +64,43 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
+  build-and-push-image:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate, security-scan]
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - id: set-tag
+        run: |
+          image_tag="v$(echo $GITHUB_SHA | cut -c1-7)"
+          echo "tag=$image_tag" >> $GITHUB_OUTPUT
+
+      - uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/backstage:${{ steps.set-tag.outputs.tag }} -f backstage/backstage-app/Dockerfile backstage/backstage-app/
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/backstage:${{ steps.set-tag.outputs.tag }}
+        shell: bash
+
   deploy:
     name: Deploy to ArgoCD
     runs-on: ubuntu-latest
-    needs: [lint-and-validate, security-scan]
+    needs: [build-and-push-image]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Update Helm Chart with new image
+        run: |
+          IMAGE_TAG=${{ needs.build-and-push-image.outputs.image_tag }}
+          echo "Updating helm-chart values.yaml with image tag $IMAGE_TAG"
+          sed -i "s|repository:.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage|" helm-chart/values.yaml
+          sed -i "s|tag:.*|tag: $IMAGE_TAG|" helm-chart/values.yaml
 
       - name: Determine Deployment Environment
         id: env
@@ -98,22 +129,3 @@ jobs:
         run: |
           argocd app sync ${{ steps.env.outputs.app_name }}
           argocd app wait ${{ steps.env.outputs.app_name }} --timeout 300
-
-  notify:
-    name: Notify Deployment Status
-    runs-on: ubuntu-latest
-    needs: [deploy]
-    if: always()
-    steps:
-      - name: Notify Slack
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          channel: '#deployments'
-          text: |
-            Backstage deployment status: ${{ job.status }}
-            Branch: ${{ github.ref }}
-            Commit: ${{ github.sha }}
-            Environment: ${{ steps.env.outputs.env }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
