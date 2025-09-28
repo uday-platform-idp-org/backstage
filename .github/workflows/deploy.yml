@@ -77,6 +77,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Install dependencies and build backend bundle
+        working-directory: ./backstage-app
+        run: |
+          yarn install
+          yarn tsc
+          yarn build:backend
+
       - id: set-tag
         run: |
           image_tag="v$(echo $GITHUB_SHA | cut -c1-7)"
