@@ -1,4 +1,4 @@
-name: Backstage CI-CD Ultra-Paralelo Total
+name: Backstage CI-CD Ultra-Paralelo Corrigido
 
 permissions:
   contents: read
@@ -47,6 +47,7 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    needs: lint
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy vulnerability scanner
@@ -65,43 +66,37 @@ jobs:
     name: Build & Push Backend
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: [lint, security-scan]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Yarn
+      - uses: actions/checkout@v3
+      - name: Cache Yarn (backend)
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
           key: yarn-cache-backend-${{ hashFiles('backstage-app/yarn.lock') }}
-
-      - name: Install dependencies and build backend
-        working-directory: ./backstage-app/packages/backend
+      - name: Install dependencies and build
+        working-directory: ./backstage-app
         run: |
           yarn install
+          yarn tsc
           yarn build:backend
-
-      - id: set-backend-tag
+      - id: set-tag-backend
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Build & Push Docker Image (Backend)
         uses: docker/build-push-action@v5
         with:
-          context: ./backstage-app/packages/backend
+          context: ./backstage-app                  # Contexto maior
           file: ./backstage-app/packages/backend/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:${{ steps.set-backend-tag.outputs.tag }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:${{ steps.set-tag-backend.outputs.tag }}
           cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache
           cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache,mode=max
 
@@ -109,43 +104,36 @@ jobs:
     name: Build & Push Frontend
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: [lint, security-scan]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Yarn
+      - uses: actions/checkout@v3
+      - name: Cache Yarn (frontend)
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
           key: yarn-cache-frontend-${{ hashFiles('backstage-app/yarn.lock') }}
-
-      - name: Install dependencies and build frontend
-        working-directory: ./backstage-app/packages/app
+      - name: Install dependencies and build
+        working-directory: ./backstage-app
         run: |
           yarn install
           yarn build:frontend
-
-      - id: set-frontend-tag
+      - id: set-tag-frontend
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Build & Push Docker Image (Frontend)
         uses: docker/build-push-action@v5
         with:
-          context: ./backstage-app/packages/app
+          context: ./backstage-app
           file: ./backstage-app/packages/app/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:${{ steps.set-frontend-tag.outputs.tag }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:${{ steps.set-tag-frontend.outputs.tag }}
           cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache
           cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache,mode=max
 
@@ -193,3 +181,4 @@ jobs:
           for APP in backend frontend; do
             argocd app sync backstage-$APP-${{ steps.env.outputs.env }}
             argocd app wait backstage-$APP-${{ steps.env.outputs.env }} --timeout 300
+          done
