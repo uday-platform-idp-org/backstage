@@ -1,4 +1,4 @@
-name: Backstage CI-CD Ultra-Paralelo
+name: Backstage CI-CD Ultra-Paralelo Total
 
 permissions:
   contents: read
@@ -32,7 +32,8 @@ on:
           - prod
 
 jobs:
-  lint-and-validate:
+  lint:
+    name: Lint Helm Chart
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +47,8 @@ jobs:
         run: helm template backstage helm-chart/ --debug --dry-run
 
   security-scan:
+    name: Security Scan
     runs-on: ubuntu-latest
-    needs: lint-and-validate
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy vulnerability scanner
@@ -62,93 +63,122 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-  build-and-push:
-    name: Build and Push Apps
+  build-backend:
+    name: Build & Push Backend
     runs-on: ubuntu-latest
-    needs: [lint-and-validate, security-scan]
-    strategy:
-      matrix:
-        app: [backend, frontend]
-    outputs:
-      image_tag: ${{ steps.set-tag.outputs.tag }}
+    timeout-minutes: 60
+    needs: []
     steps:
       - uses: actions/checkout@v3
-
       - name: Cache Yarn
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: yarn-cache-${{ matrix.app }}-${{ hashFiles('backstage-app/yarn.lock') }}
-          restore-keys: |
-            yarn-cache-${{ matrix.app }}-
-
+          key: yarn-cache-backend-${{ hashFiles('backstage-app/yarn.lock') }}
       - name: Install dependencies and build
-        working-directory: ${{ matrix.app == 'backend' && './backstage-app' || './frontend-app' }}
+        working-directory: ./backstage-app
         run: |
           yarn install
-          if [ "${{ matrix.app }}" == "backend" ]; then
-            yarn tsc
-            yarn build:backend
-          else
-            yarn build:frontend
-          fi
-
+          yarn tsc
+          yarn build:backend
       - id: set-tag
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build & Push Docker Image with Cache
+      - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.app == 'backend' && './backstage-app' || './frontend-app' }}
-          file: ${{ matrix.app == 'backend' && './backstage-app/Dockerfile' || './frontend-app/Dockerfile' }}
+          context: ./backstage-app
+          file: ./backstage-app/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-${{ matrix.app }}:${{ steps.set-tag.outputs.tag }}
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-${{ matrix.app }}:cache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-${{ matrix.app }}:cache,mode=max
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:${{ steps.set-tag.outputs.tag }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache,mode=max
 
-  deploy-dev:
-    name: Deploy to Dev
+  build-frontend:
+    name: Build & Push Frontend
     runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.ref != 'refs/heads/main'
+    timeout-minutes: 60
+    needs: []
+    steps:
+      - uses: actions/checkout@v3
+      - name: Cache Yarn
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/yarn
+            ~/.yarn
+          key: yarn-cache-frontend-${{ hashFiles('frontend-app/yarn.lock') }}
+      - name: Install dependencies and build
+        working-directory: ./frontend-app
+        run: |
+          yarn install
+          yarn build:frontend
+      - id: set-tag
+        run: |
+          IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+      - uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build & Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend-app
+          file: ./frontend-app/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:${{ steps.set-tag.outputs.tag }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache,mode=max
+
+  update-helm-values:
+    name: Update Helm Chart Values
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update values.yaml with new image tags
+        run: |
+          BACKEND_TAG=${{ needs.build-backend.outputs.tag }}
+          FRONTEND_TAG=${{ needs.build-frontend.outputs.tag }}
+          sed -i "s|repository:.*backend.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend|" helm-chart/values.yaml
+          sed -i "s|tag:.*backend.*|tag: $BACKEND_TAG|" helm-chart/values.yaml
+          sed -i "s|repository:.*frontend.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend|" helm-chart/values.yaml
+          sed -i "s|tag:.*frontend.*|tag: $FRONTEND_TAG|" helm-chart/values.yaml
+
+  deploy:
+    name: Deploy to ArgoCD
+    runs-on: ubuntu-latest
+    needs: [lint, security-scan, update-helm-values]
     steps:
       - uses: actions/checkout@v4
       - name: Install ArgoCD CLI
         run: |
           sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           sudo chmod +x /usr/local/bin/argocd
-      - name: Sync Apps to Dev
+      - name: Determine environment
+        id: env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="${{ github.event.inputs.environment }}"
+          elif [[ "${GITHUB_REF##*/}" == "main" ]]; then
+            ENV="prod"
+          else
+            ENV="dev"
+          fi
+          echo "env=$ENV" >> $GITHUB_OUTPUT
+      - name: ArgoCD Login
+        run: |
+          argocd login argocd.uday.com.br:9092 --insecure --grpc-web --username admin --password ${{ secrets.ARGOCD_PASSWORD }}
+      - name: Sync Apps
         run: |
           for APP in backend frontend; do
-            argocd login argocd.uday.com.br:9092 --insecure --grpc-web --username admin --password ${{ secrets.ARGOCD_PASSWORD }}
-            argocd app sync backstage-$APP-dev
-            argocd app wait backstage-$APP-dev --timeout 300
-          done
-
-  deploy-prod:
-    name: Deploy to Prod
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod')
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install ArgoCD CLI
-        run: |
-          sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          sudo chmod +x /usr/local/bin/argocd
-      - name: Sync Apps to Prod
-        run: |
-          for APP in backend frontend; do
-            argocd login argocd.uday.com.br:9092 --insecure --grpc-web --username admin --password ${{ secrets.ARGOCD_PASSWORD }}
-            argocd app sync backstage-$APP-prod
-            argocd app wait backstage-$APP-prod --timeout 300
-          done
+            argocd app sync backstage-$APP-${{ steps.env.outputs.env }}
+            argocd app wait backstage-$APP-${{ steps.env.outputs.env }} --timeout 300
