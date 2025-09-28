@@ -1,4 +1,4 @@
-name: Backstage CI-CD Ultra-Paralelo Total
+name: Backstage CI-CD Ultra-Paralelo Optimizado
 
 permissions:
   contents: read
@@ -10,15 +10,15 @@ on:
       - main
       - dev
     paths:
-      - 'backstage-app/**'
-      - 'frontend-app/**'
+      - 'packages/backend/**'
+      - 'packages/app/**'
       - 'helm-chart/**'
   pull_request:
     branches:
       - dev
     paths:
-      - 'backstage-app/**'
-      - 'frontend-app/**'
+      - 'packages/backend/**'
+      - 'packages/app/**'
       - 'helm-chart/**'
   workflow_dispatch:
     inputs:
@@ -33,7 +33,6 @@ on:
 
 jobs:
   lint:
-    name: Lint Helm Chart
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,107 +46,88 @@ jobs:
         run: helm template backstage helm-chart/ --debug --dry-run
 
   security-scan:
-    name: Security Scan
     runs-on: ubuntu-latest
+    needs: lint
     steps:
       - uses: actions/checkout@v4
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: 'helm-chart/'
           format: 'sarif'
           output: 'trivy-results.sarif'
-      - name: Upload Trivy scan results
+      - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
 
-  build-backend:
-    name: Build & Push Backend
+  build-app:
+    name: Build & Push Apps (Backend + Frontend)
     runs-on: ubuntu-latest
+    needs: [lint, security-scan]
+    strategy:
+      matrix:
+        app: [backend, frontend]
     timeout-minutes: 60
-    needs: []
     steps:
-      - uses: actions/checkout@v3
-      - name: Cache Yarn
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/yarn
-            ~/.yarn
-          key: yarn-cache-backend-${{ hashFiles('backstage-app/yarn.lock') }}
-      - name: Install dependencies and build
-        working-directory: ./backstage-app
-        run: |
-          yarn install
-          yarn tsc
-          yarn build:backend
-      - id: set-tag
-        run: |
-          IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
-          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-      - uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build & Push Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backstage-app
-          file: ./backstage-app/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:${{ steps.set-tag.outputs.tag }}
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache,mode=max
+      - uses: actions/checkout@v4
 
-  build-frontend:
-    name: Build & Push Frontend
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: []
-    steps:
-      - uses: actions/checkout@v3
+      - name: Set working directory
+        id: set-dir
+        run: |
+          if [ "${{ matrix.app }}" == "backend" ]; then
+            echo "DIR=packages/backend" >> $GITHUB_OUTPUT
+          else
+            echo "DIR=packages/app" >> $GITHUB_OUTPUT
+          fi
+
       - name: Cache Yarn
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: yarn-cache-frontend-${{ hashFiles('frontend-app/yarn.lock') }}
+          key: yarn-cache-${{ matrix.app }}-${{ hashFiles('packages/' + matrix.app + '/yarn.lock') }}
+
       - name: Install dependencies and build
-        working-directory: ./frontend-app
         run: |
-          yarn install
-          yarn build:frontend
+          cd ${{ steps.set-dir.outputs.DIR }}
+          yarn install --immutable
+          if [ "${{ matrix.app }}" == "backend" ]; then
+            yarn build
+          else
+            yarn build
+          fi
+
       - id: set-tag
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: ./frontend-app
-          file: ./frontend-app/Dockerfile
+          context: ${{ steps.set-dir.outputs.DIR }}
+          file: ${{ steps.set-dir.outputs.DIR }}/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:${{ steps.set-tag.outputs.tag }}
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache,mode=max
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-${{ matrix.app }}:${{ steps.set-tag.outputs.tag }}
 
   update-helm-values:
     name: Update Helm Chart Values
     runs-on: ubuntu-latest
-    needs: [build-backend, build-frontend]
+    needs: build-app
     steps:
       - uses: actions/checkout@v4
-      - name: Update values.yaml with new image tags
+      - name: Update values.yaml
         run: |
-          BACKEND_TAG=${{ needs.build-backend.outputs.tag }}
-          FRONTEND_TAG=${{ needs.build-frontend.outputs.tag }}
+          BACKEND_TAG=$(jq -r '.[] | select(.matrix.app=="backend") | .steps[] | select(.id=="set-tag") | .outputs.tag' <<< '${{ toJSON(needs.build-app) }}')
+          FRONTEND_TAG=$(jq -r '.[] | select(.matrix.app=="frontend") | .steps[] | select(.id=="set-tag") | .outputs.tag' <<< '${{ toJSON(needs.build-app) }}')
           sed -i "s|repository:.*backend.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend|" helm-chart/values.yaml
           sed -i "s|tag:.*backend.*|tag: $BACKEND_TAG|" helm-chart/values.yaml
           sed -i "s|repository:.*frontend.*|repository: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend|" helm-chart/values.yaml
@@ -156,7 +136,7 @@ jobs:
   deploy:
     name: Deploy to ArgoCD
     runs-on: ubuntu-latest
-    needs: [lint, security-scan, update-helm-values]
+    needs: update-helm-values
     steps:
       - uses: actions/checkout@v4
       - name: Install ArgoCD CLI
