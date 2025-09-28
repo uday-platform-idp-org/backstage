@@ -1,4 +1,4 @@
-name: Backstage CI-CD Ultra-Paralelo Total
+name: Backstage CI-CD Ultra-Paralelo Corrigido
 
 permissions:
   contents: read
@@ -11,16 +11,12 @@ on:
       - dev
     paths:
       - 'backstage-app/**'
-      - 'packages/backend/**'
-      - 'packages/app/**'
       - 'helm-chart/**'
   pull_request:
     branches:
       - dev
     paths:
       - 'backstage-app/**'
-      - 'packages/backend/**'
-      - 'packages/app/**'
       - 'helm-chart/**'
   workflow_dispatch:
     inputs:
@@ -70,69 +66,83 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - name: Cache Yarn
+      - uses: actions/checkout@v3
+
+      - name: Cache Yarn Backend
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: backend-yarn-${{ hashFiles('packages/backend/yarn.lock') }}
-      - name: Install dependencies and build
-        working-directory: ./packages/backend
+          key: backend-yarn-${{ hashFiles('backstage-app/packages/backend/yarn.lock') }}
+
+      - name: Install dependencies and build Backend
+        working-directory: ./backstage-app/packages/backend
         run: |
           yarn install
           yarn tsc
           yarn build
+
       - id: set-backend-tag
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build & Push Docker Image
+
+      - name: Build & Push Docker Image Backend
         uses: docker/build-push-action@v5
         with:
-          context: ./packages/backend
-          file: ./packages/backend/Dockerfile
+          context: ./backstage-app/packages/backend
+          file: ./backstage-app/packages/backend/Dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:${{ steps.set-backend-tag.outputs.tag }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-backend:cache,mode=max
 
   build-frontend:
     name: Build & Push Frontend
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - name: Cache Yarn
+      - uses: actions/checkout@v3
+
+      - name: Cache Yarn Frontend
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/yarn
             ~/.yarn
-          key: frontend-yarn-${{ hashFiles('packages/app/yarn.lock') }}
-      - name: Install dependencies and build
-        working-directory: ./packages/app
+          key: frontend-yarn-${{ hashFiles('backstage-app/packages/app/yarn.lock') }}
+
+      - name: Install dependencies and build Frontend
+        working-directory: ./backstage-app/packages/app
         run: |
           yarn install
           yarn build
+
       - id: set-frontend-tag
         run: |
           IMAGE_TAG="v$(echo $GITHUB_SHA | cut -c1-7)"
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build & Push Docker Image
+
+      - name: Build & Push Docker Image Frontend
         uses: docker/build-push-action@v5
         with:
-          context: ./packages/app
-          file: ./packages/app/Dockerfile
+          context: ./backstage-app/packages/app
+          file: ./backstage-app/packages/app/Dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:${{ steps.set-frontend-tag.outputs.tag }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/backstage-frontend:cache,mode=max
 
   update-helm-values:
     name: Update Helm Chart Values
