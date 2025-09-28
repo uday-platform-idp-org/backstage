@@ -77,6 +77,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Cache Yarn dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/yarn
+            ~/.yarn
+          key: yarn-cache-${{ hashFiles('backstage-app/yarn.lock') }}
+          restore-keys: |
+            yarn-cache-
+
       - name: Install dependencies and build backend bundle
         working-directory: ./backstage-app
         run: |
@@ -94,9 +104,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - run: |
-          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/backstage:${{ steps.set-tag.outputs.tag }} -f backstage-app/Dockerfile backstage-app/
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.docker-cache
+          key: docker-cache-${{ github.sha }}
+          policy: pull
+
+      - name: Build and Push Docker Image
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            --cache-from=type=local,src=/tmp/.docker-cache \
+            --cache-to=type=local,dest=/tmp/.docker-cache-new,mode=max \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/backstage:${{ steps.set-tag.outputs.tag }} \
+            -f backstage-app/Dockerfile backstage-app/
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/backstage:${{ steps.set-tag.outputs.tag }}
+          rm -rf /tmp/.docker-cache
+          mv /tmp/.docker-cache-new /tmp/.docker-cache
         shell: bash
 
   deploy:
@@ -105,6 +129,11 @@ jobs:
     needs: [build-and-push-image]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install ArgoCD CLI
+        run: |
+          sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo chmod +x /usr/local/bin/argocd
 
       - name: Update Helm Chart with new image
         run: |
